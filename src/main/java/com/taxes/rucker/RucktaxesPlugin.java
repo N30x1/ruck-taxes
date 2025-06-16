@@ -55,8 +55,8 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.WidgetLoaded;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.api.widgets.WidgetID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -651,9 +651,9 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 			final int itemIndex = menuEntry.getParam0();
 
 			ItemContainer container = null;
-			if (groupId == WidgetID.BANK_GROUP_ID) {
+			if (groupId == InterfaceID.BANKMAIN) {
 				container = client.getItemContainer(InventoryID.BANK);
-			} else if (groupId == WidgetID.INVENTORY_GROUP_ID) {
+			} else if (groupId == InterfaceID.INVENTORY) {
 				container = client.getItemContainer(InventoryID.INVENTORY);
 			}
 
