@@ -19,22 +19,26 @@ public class Notification {
 
     private String message;
 
-    @SerializedName("from_rsn")
-    private String fromPlayer;
+    @SerializedName("from_player_id")
+    private String fromPlayerId;
 
-    @SerializedName("to_rsn")
-    private String toPlayer;
+    @SerializedName("from_rsn")
+    private String fromPlayerRsn;
+
+    // MODIFIED: This is now the anonymous ID of the recipient.
+    private String toPlayerId;
 
     private Instant timestamp;
     private NotificationType type;
     private NotificationStatus status;
 
-    public Notification(String notificationId, String orderId, String message, String fromPlayer, String toPlayer, Instant timestamp, NotificationType type, NotificationStatus status) {
+    public Notification(String notificationId, String orderId, String message, String fromPlayerId, String fromPlayerRsn, String toPlayerId, Instant timestamp, NotificationType type, NotificationStatus status) {
         this.notificationId = notificationId;
         this.orderId = orderId;
         this.message = message;
-        this.fromPlayer = fromPlayer;
-        this.toPlayer = toPlayer;
+        this.fromPlayerId = fromPlayerId;
+        this.fromPlayerRsn = fromPlayerRsn;
+        this.toPlayerId = toPlayerId;
         this.timestamp = timestamp;
         this.type = type;
         this.status = status;

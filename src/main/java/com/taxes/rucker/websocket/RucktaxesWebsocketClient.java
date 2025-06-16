@@ -1,11 +1,17 @@
 package com.taxes.rucker.websocket;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.taxes.rucker.CryptoUtils;
+import com.taxes.rucker.IdentityManager;
+import com.taxes.rucker.RucktaxesConfig;
 import com.taxes.rucker.RucktaxesPlugin;
 import com.taxes.rucker.websocket.dto.AuthResponse;
 import com.taxes.rucker.websocket.dto.TradeOrder;
 import com.taxes.rucker.websocket.dto.WebsocketMessage;
 import java.io.IOException;
+import java.security.KeyPair;
+import java.security.PrivateKey;
 import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nonnull;
@@ -13,7 +19,7 @@ import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
-import okhttp3.FormBody;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -25,21 +31,28 @@ import okhttp3.WebSocketListener;
 @Slf4j
 @Singleton
 public class RucktaxesWebsocketClient extends WebSocketListener {
-    private enum ConnectionState { DISCONNECTED, CONNECTING, CONNECTED }
-
+    private enum ConnectionState { DISCONNECTED, AUTHENTICATING, CONNECTED }
     private static final String BASE_URL = "api.ruckge.com";
+    private static final String SCHEME = "https";
+    private static final String WS_SCHEME = "wss";
+
+    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private final RucktaxesPlugin plugin;
     private final OkHttpClient httpClient;
     private final Gson gson;
+    private final IdentityManager identityManager;
 
     private volatile ConnectionState state = ConnectionState.DISCONNECTED;
     private WebSocket webSocket;
     private String rsn;
+    private PrivateKey privateKey;
+    private String generatedUsername;
 
     public RucktaxesWebsocketClient(RucktaxesPlugin plugin, OkHttpClient httpClient, Gson gson) {
         this.plugin = plugin;
         this.httpClient = httpClient;
         this.gson = gson;
+        this.identityManager = new IdentityManager();
     }
 
     public void connect(String rsn) {
@@ -47,11 +60,10 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
             log.warn("Connect called while already connecting or connected. State: {}", state);
             return;
         }
-
         this.rsn = rsn;
-        state = ConnectionState.CONNECTING;
+        state = ConnectionState.AUTHENTICATING;
         log.info("Attempting to connect to Rucktaxes service for RSN: {}", rsn);
-        getAuthTokenAndConnect();
+        startAuthenticationFlow();
     }
 
     public void disconnect() {
@@ -69,15 +81,152 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
         return state == ConnectionState.CONNECTED;
     }
 
-    private void getAuthTokenAndConnect() {
-        RequestBody formBody = new FormBody.Builder()
-                .add("username", rsn)
-                .add("password", "")
-                .build();
+    private void startAuthenticationFlow() {
+        this.privateKey = identityManager.loadPrivateKey();
+        this.generatedUsername = identityManager.loadGeneratedUsername();
+
+        if (this.privateKey == null || this.generatedUsername == null || this.generatedUsername.isEmpty()) {
+            log.info("No existing identity found. Starting registration process.");
+            registerNewClient();
+        } else {
+            log.info("Existing identity found for generated username: {}. Starting challenge-response.", generatedUsername);
+            requestChallenge(this.generatedUsername);
+        }
+    }
+
+    private void registerNewClient() {
+        KeyPair keyPair = CryptoUtils.generateKeyPair();
+        if (keyPair == null) {
+            log.error("Failed to generate key pair. Cannot register.");
+            state = ConnectionState.DISCONNECTED;
+            return;
+        }
+        this.privateKey = keyPair.getPrivate();
+        String publicKeyPemString = CryptoUtils.publicKeyToPemString(keyPair.getPublic());
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("public_key", publicKeyPemString);
+        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
 
         Request request = new Request.Builder()
-                .url("https://" + BASE_URL + "/v1/auth/token")
-                .post(formBody)
+                .url(SCHEME + "://" + BASE_URL + "/v1/auth/register")
+                .post(body)
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(@Nonnull Call call, @Nonnull IOException e) {
+                log.error("Failed to register with backend, will retry.", e);
+                state = ConnectionState.DISCONNECTED;
+            }
+
+            @Override
+            public void onResponse(@Nonnull Call call, @Nonnull Response response) {
+                if (!response.isSuccessful()) {
+                    log.error("Registration failed with code: {}, will retry.", response.code());
+                    state = ConnectionState.DISCONNECTED;
+                    response.close();
+                    return;
+                }
+                try (ResponseBody responseBody = response.body()) {
+                    if (responseBody == null) {
+                        log.error("Registration response body was null despite a successful status code. Will retry.");
+                        state = ConnectionState.DISCONNECTED;
+                        return;
+                    }
+
+                    String responseString = responseBody.string();
+                    log.debug("Registration response string: {}", responseString);
+                    JsonObject json = gson.fromJson(responseString, JsonObject.class);
+
+                    if (json == null || !json.has("generated_username")) {
+                        log.error("Registration response JSON is malformed or missing 'generated_username' key.");
+                        state = ConnectionState.DISCONNECTED;
+                        return;
+                    }
+
+                    generatedUsername = json.get("generated_username").getAsString();
+                    identityManager.saveIdentity(privateKey, generatedUsername);
+
+                    log.info("Successfully registered. New username: {}", generatedUsername);
+                    requestChallenge(generatedUsername);
+                } catch (Exception e) {
+                    log.error("Failed to parse registration response, will retry.", e);
+                    state = ConnectionState.DISCONNECTED;
+                }
+            }
+        });
+    }
+
+    private void requestChallenge(String generatedUsername) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("generated_username", generatedUsername);
+        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
+
+        Request request = new Request.Builder()
+                .url(SCHEME + "://" + BASE_URL + "/v1/auth/challenge")
+                .post(body)
+                .build();
+
+        httpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(@Nonnull Call call, @Nonnull IOException e) {
+                log.error("Failed to get challenge from backend, will retry.", e);
+                state = ConnectionState.DISCONNECTED;
+            }
+
+            @Override
+            public void onResponse(@Nonnull Call call, @Nonnull Response response) {
+                if (!response.isSuccessful()) {
+                    log.error("Challenge request failed with code: {}, will retry.", response.code());
+                    state = ConnectionState.DISCONNECTED;
+                    response.close();
+                    return;
+                }
+                try (ResponseBody responseBody = response.body()) {
+                    if (responseBody == null) {
+                        log.error("Challenge response body was null. Will retry.");
+                        state = ConnectionState.DISCONNECTED;
+                        return;
+                    }
+                    String responseString = responseBody.string();
+                    log.debug("Challenge response string: {}", responseString);
+                    JsonObject json = gson.fromJson(responseString, JsonObject.class);
+
+                    if (json == null || !json.has("challenge")) {
+                        log.error("Challenge response JSON is malformed or missing 'challenge' key.");
+                        state = ConnectionState.DISCONNECTED;
+                        return;
+                    }
+
+                    String challenge = json.get("challenge").getAsString();
+                    log.info("Received challenge. Signing and requesting token.");
+                    requestToken(generatedUsername, challenge);
+                } catch (Exception e) {
+                    log.error("Failed to parse challenge response, will retry.", e);
+                    state = ConnectionState.DISCONNECTED;
+                }
+            }
+        });
+    }
+
+    private void requestToken(String generatedUsername, String challenge) {
+        String signature = CryptoUtils.sign(this.privateKey, challenge);
+        if (signature == null) {
+            log.error("Failed to sign challenge. Cannot authenticate.");
+            state = ConnectionState.DISCONNECTED;
+            return;
+        }
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("generated_username", generatedUsername);
+        payload.addProperty("challenge", challenge);
+        payload.addProperty("signature", signature);
+        RequestBody body = RequestBody.create(JSON, gson.toJson(payload));
+
+        Request request = new Request.Builder()
+                .url(SCHEME + "://" + BASE_URL + "/v1/auth/token")
+                .post(body)
                 .build();
 
         httpClient.newCall(request).enqueue(new Callback() {
@@ -92,19 +241,28 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
                 if (!response.isSuccessful()) {
                     log.error("Authentication failed with code: {}, will retry.", response.code());
                     state = ConnectionState.DISCONNECTED;
+                    response.close();
                     return;
                 }
                 try (ResponseBody responseBody = response.body()) {
                     if (responseBody == null) {
-                        log.error("Authentication response body was null.");
+                        log.error("Token response body was null. Will retry.");
+                        state = ConnectionState.DISCONNECTED;
+                        return;
+                    }
+                    String responseString = responseBody.string();
+                    log.debug("Token response string: {}", responseString);
+                    AuthResponse authResponse = gson.fromJson(responseString, AuthResponse.class);
+
+                    if (authResponse == null || authResponse.getAccess_token() == null) {
+                        log.error("Token response JSON is malformed or missing 'access_token' key.");
                         state = ConnectionState.DISCONNECTED;
                         return;
                     }
 
-                    AuthResponse authResponse = gson.fromJson(responseBody.string(), AuthResponse.class);
                     String token = authResponse.getAccess_token();
                     Request wsRequest = new Request.Builder()
-                            .url("wss://" + BASE_URL + "/ws/" + token)
+                            .url(WS_SCHEME + "://" + BASE_URL + "/ws/" + token)
                             .build();
                     webSocket = httpClient.newWebSocket(wsRequest, RucktaxesWebsocketClient.this);
                 } catch (Exception e) {
@@ -120,6 +278,7 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
         log.info("Rucktaxes WebSocket connection opened.");
         state = ConnectionState.CONNECTED;
         plugin.onWebsocketConnected();
+        sendSetRsn(this.rsn);
     }
 
     @Override
@@ -163,6 +322,10 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
         webSocket.send(gson.toJson(messageMap));
     }
 
+    public void sendSetRsn(String rsn) {
+        sendMessage("SET_RSN", Map.of("rsn", rsn));
+    }
+
     public void sendUpdateLocation(int x, int y, int plane) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("x", x);
@@ -194,7 +357,6 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
     }
 
     public void sendCancelOrder(String orderId) {
-        // FIX: Add a null check to prevent NullPointerException when creating the payload map.
         if (orderId == null) {
             log.warn("Attempted to send CANCEL_ORDER with a null orderId.");
             return;
@@ -234,11 +396,11 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
         sendMessage("COMPLETE_TRADE", Map.of("order_id", orderId));
     }
 
-    public void sendAddToIgnoreList(String rsn) {
-        sendMessage("ADD_TO_IGNORE_LIST", Map.of("rsn", rsn));
+    public void sendAddToIgnoreList(String userId) {
+        sendMessage("ADD_TO_IGNORE_LIST", Map.of("user_id", userId));
     }
 
-    public void sendRemoveFromIgnoreList(String rsn) {
-        sendMessage("REMOVE_FROM_IGNORE_LIST", Map.of("rsn", rsn));
+    public void sendRemoveFromIgnoreList(String userId) {
+        sendMessage("REMOVE_FROM_IGNORE_LIST", Map.of("user_id", userId));
     }
 }

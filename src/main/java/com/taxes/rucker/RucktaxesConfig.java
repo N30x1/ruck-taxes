@@ -6,6 +6,7 @@ import net.runelite.client.config.ConfigItem;
 
 @ConfigGroup("rucktaxes")
 public interface RucktaxesConfig extends Config {
+
 	@ConfigItem(
 			keyName = "useShift",
 			name = "Shift right-click to show",

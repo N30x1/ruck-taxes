@@ -2,6 +2,7 @@ package com.taxes.rucker;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import com.google.inject.Provides;
 import com.taxes.rucker.overlays.BankHighlightOverlay;
@@ -124,8 +125,11 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 	private NavigationButton navButton;
 	private ScheduledFuture<?> reconnectFuture;
 	private ScheduledFuture<?> locationUpdateFuture;
-	private boolean isSubscribedToWebsocket = false;
 	private boolean hasTradeWindowBeenSeen = false;
+	private boolean connectionAttemptedThisSession = false;
+
+	// NEW: Add an instance of IdentityManager to the plugin
+	private IdentityManager identityManager;
 
 	@Provides
 	RucktaxesConfig provideConfig(ConfigManager configManager) {
@@ -154,6 +158,9 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 
 	@Override
 	protected void startUp() {
+		// NEW: Initialize the IdentityManager
+		this.identityManager = new IdentityManager();
+
 		panel = new RucktaxesPanel(this, itemManager);
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/panel_icon.png");
 		navButton = NavigationButton.builder().tooltip("Rucktaxes Trades").icon(icon).priority(6).panel(panel).build();
@@ -184,7 +191,7 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 
 	private void startReconnectTask() {
 		if (reconnectFuture == null || reconnectFuture.isDone()) {
-			reconnectFuture = executor.scheduleAtFixedRate(this::attemptReconnect, 15, 15, TimeUnit.SECONDS);
+			reconnectFuture = executor.scheduleAtFixedRate(this::attemptConnect, 15, 15, TimeUnit.SECONDS);
 		}
 	}
 
@@ -221,8 +228,7 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		});
 	}
 
-	private void attemptReconnect() {
-		// FIX: Corrected logic to use !isConnected() to ensure reconnection attempts happen when disconnected.
+	private void attemptConnect() {
 		if (client.getGameState() == GameState.LOGGED_IN && !websocketClient.isConnected()) {
 			clientThread.invokeLater(() -> {
 				Player localPlayer = client.getLocalPlayer();
@@ -235,24 +241,18 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event) {
-		if (event.getGameState() == GameState.LOGIN_SCREEN || event.getGameState() == GameState.HOPPING) {
+		if (event.getGameState() == GameState.LOGGED_IN && !connectionAttemptedThisSession) {
+			attemptConnect();
+			connectionAttemptedThisSession = true;
+		} else if (event.getGameState() == GameState.LOGIN_SCREEN || event.getGameState() == GameState.HOPPING) {
 			websocketClient.disconnect();
 			resetAllPluginData();
-			isSubscribedToWebsocket = false;
+			connectionAttemptedThisSession = false;
 		}
 	}
 
 	@Subscribe
 	public void onChatMessage(ChatMessage chatMessage) {
-		if (!isSubscribedToWebsocket && chatMessage.getType() == ChatMessageType.GAMEMESSAGE &&
-				chatMessage.getMessage().contains("Welcome to Old School RuneScape")) {
-			Player localPlayer = client.getLocalPlayer();
-			if (localPlayer != null && localPlayer.getName() != null) {
-				websocketClient.connect(localPlayer.getName());
-				isSubscribedToWebsocket = true;
-			}
-		}
-
 		if (chatMessage.getType() == ChatMessageType.TRADE && chatMessage.getMessage().contains("Accepted trade.")) {
 			if (activeTrade != null) {
 				handleTradeCompletion(activeTrade.getOrderId());
@@ -271,7 +271,7 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event) {
 		int containerId = event.getContainerId();
-		if (containerId == InventoryID.TRADE.getId() || containerId == InventoryID.TRADEOTHER.getId()) {
+		if (containerId == 90 || containerId == 0x8000) {
 			clientThread.invokeLater(this::verifyTradeContents);
 		}
 	}
@@ -321,13 +321,12 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 			return;
 		}
 
-		Player localPlayer = client.getLocalPlayer();
-		if (localPlayer == null || localPlayer.getName() == null) return;
-		String rsn = localPlayer.getName();
+		String myGeneratedUsername = identityManager.loadGeneratedUsername();
+		if (myGeneratedUsername == null || myGeneratedUsername.isEmpty()) return;
 
 		switch (message.getType()) {
 			case "INITIAL_STATE":
-				handleInitialState(message.getPayload(), rsn);
+				handleInitialState(message.getPayload(), myGeneratedUsername);
 				break;
 			case "USER_STATUS_UPDATE":
 				handleUserStatusUpdate(message.getPayload());
@@ -342,13 +341,13 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 				handlePlayerLocationUpdate(message.getPayload());
 				break;
 			case "ORDER_CREATED":
-				handleOrderCreated(message.getPayload(), rsn);
+				handleOrderCreated(message.getPayload(), myGeneratedUsername);
 				break;
 			case "ORDER_UPDATED":
-				handleOrderUpdated(message.getPayload(), rsn);
+				handleOrderUpdated(message.getPayload(), myGeneratedUsername);
 				break;
 			case "ORDER_DELETED":
-				handleOrderDeleted(message.getPayload(), rsn);
+				handleOrderDeleted(message.getPayload(), myGeneratedUsername);
 				break;
 			case "IGNORE_LIST_STATE":
 				handleIgnoreListState(message.getPayload());
@@ -356,76 +355,74 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		}
 	}
 
-	private void handleInitialState(JsonElement payload, String rsn) {
+	private void handleInitialState(JsonElement payload, String myId) {
 		allOrdersList.clear();
 		allOrdersList.addAll(gson.fromJson(payload.getAsJsonObject().get("all_orders"), new TypeToken<ArrayList<TradeOrder>>() {}.getType()));
 
 		onlineUsers.clear();
 		onlineUsers.addAll(gson.fromJson(payload.getAsJsonObject().get("online_users"), new TypeToken<HashSet<String>>() {}.getType()));
 
-		updateAndRefreshLists(rsn);
+		updateAndRefreshLists(myId);
 	}
 
 	private void handleUserStatusUpdate(JsonElement payload) {
-		String updatedRsn = payload.getAsJsonObject().get("rsn").getAsString();
+		String updatedId = payload.getAsJsonObject().get("user_id").getAsString();
 		boolean isOnline = payload.getAsJsonObject().get("is_online").getAsBoolean();
 		if (isOnline) {
-			onlineUsers.add(updatedRsn);
+			onlineUsers.add(updatedId);
 		} else {
-			onlineUsers.remove(updatedRsn);
+			onlineUsers.remove(updatedId);
 		}
 		SwingUtilities.invokeLater(() -> panel.onOrderListUpdated());
 	}
 
 	private void handleTradeNotification(JsonElement payload) {
-		Notification receivedNotification = gson.fromJson(payload, Notification.class);
-		if (serverIgnoredList.contains(receivedNotification.getFromPlayer().toLowerCase())) return;
+		JsonObject notifJson = payload.getAsJsonObject();
+		String fromPlayerId = notifJson.get("from_player_id").getAsString();
+
+		if (serverIgnoredList.contains(fromPlayerId)) return;
+
+		Notification receivedNotification = new Notification();
+		receivedNotification.setNotificationId(notifJson.get("notification_id").getAsString());
+		receivedNotification.setOrderId(notifJson.get("order_id").getAsString());
+		receivedNotification.setFromPlayerId(fromPlayerId);
+		receivedNotification.setFromPlayerRsn(notifJson.get("from_rsn").getAsString());
+		receivedNotification.setMessage(notifJson.get("message").getAsString());
 		receivedNotification.setType(Notification.NotificationType.RECEIVED);
 		receivedNotification.setStatus(Notification.NotificationStatus.PENDING);
+		receivedNotification.setToPlayerId(identityManager.loadGeneratedUsername()); // The recipient is me
 		notificationList.add(receivedNotification);
 		SwingUtilities.invokeLater(() -> panel.setNotifications(notificationList));
 
-		allOrdersList.stream()
-				.filter(o -> o.getOrderId().equals(receivedNotification.getOrderId()))
-				.findFirst()
-				.ifPresent(order -> {
-					String action = order.getType() == TradeOrder.OrderType.BUY ? "sell you" : "buy your" ;
-					String message = String.format("%s wants to %s %s x %s @ %s ea.",
-							receivedNotification.getFromPlayer(),
-							action,
-							QuantityFormatter.formatNumber(order.getQuantity()),
-							order.getItemName(),
-							QuantityFormatter.formatNumber(order.getPricePerItem()));
-					sendGameMessage(message);
-				});
+		sendGameMessage(receivedNotification.getMessage());
 	}
 
 	private void handleTradeStatusUpdate(JsonElement payload) {
-		String orderId = payload.getAsJsonObject().get("order_id").getAsString();
-		Notification.NotificationStatus newStatus = Notification.NotificationStatus.valueOf(payload.getAsJsonObject().get("status").getAsString());
+		JsonObject statusJson = payload.getAsJsonObject();
+		String orderId = statusJson.get("order_id").getAsString();
+		Notification.NotificationStatus newStatus = Notification.NotificationStatus.valueOf(statusJson.get("status").getAsString());
 
 		if (newStatus == Notification.NotificationStatus.ACCEPTED) {
 			startLocationUpdates();
-			notificationList.stream()
-					.filter(n -> n.getOrderId().equals(orderId) && n.getType() == Notification.NotificationType.SENT)
+			String initiatorRsn = statusJson.get("initiator_rsn").getAsString();
+			String recipientRsn = statusJson.get("recipient_rsn").getAsString();
+			String myRsn = client.getLocalPlayer().getName();
+
+            if (myRsn != null) {
+                this.otherPlayerRsn = myRsn.equalsIgnoreCase(initiatorRsn) ? recipientRsn : initiatorRsn;
+            }
+
+            notificationList.stream()
+					.filter(n -> n.getOrderId().equals(orderId) && n.getStatus() == Notification.NotificationStatus.PENDING)
 					.findFirst()
-					.ifPresent(sentNotification -> {
-						// FIX: Set the activeTrade for the initiator so they can receive location updates
-						this.activeTrade = sentNotification;
-						this.otherPlayerRsn = sentNotification.getToPlayer();
-						allOrdersList.stream()
-								.filter(o -> o.getOrderId().equals(orderId))
-								.findFirst()
-								.ifPresent(order -> {
-									String action = order.getType() == TradeOrder.OrderType.SELL ? "buy" : "sell";
-									String message = String.format("%s accepted your %s request for %s x %s @ %s ea.",
-											sentNotification.getToPlayer(),
-											action,
-											QuantityFormatter.formatNumber(order.getQuantity()),
-											order.getItemName(),
-											QuantityFormatter.formatNumber(order.getPricePerItem()));
-									sendGameMessage(message);
-								});
+					.ifPresent(notification -> {
+						this.activeTrade = notification;
+						notification.setStatus(Notification.NotificationStatus.ACCEPTED);
+
+						String message = String.format("%s accepted the trade request. Meet up to complete the trade.", this.otherPlayerRsn);
+						sendGameMessage(message);
+
+						SwingUtilities.invokeLater(() -> panel.updateNotificationPlayerName(notification.getNotificationId(), this.otherPlayerRsn));
 					});
 		}
 
@@ -458,19 +455,19 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		updateWorldMapPoint();
 	}
 
-	private void handleOrderCreated(JsonElement payload, String rsn) {
+	private void handleOrderCreated(JsonElement payload, String myId) {
 		allOrdersList.add(gson.fromJson(payload, TradeOrder.class));
-		updateAndRefreshLists(rsn);
+		updateAndRefreshLists(myId);
 	}
 
-	private void handleOrderUpdated(JsonElement payload, String rsn) {
+	private void handleOrderUpdated(JsonElement payload, String myId) {
 		TradeOrder updatedOrder = gson.fromJson(payload, TradeOrder.class);
 		allOrdersList.removeIf(o -> o.getOrderId().equals(updatedOrder.getOrderId()));
 		allOrdersList.add(updatedOrder);
-		updateAndRefreshLists(rsn);
+		updateAndRefreshLists(myId);
 	}
 
-	private void handleOrderDeleted(JsonElement payload, String rsn) {
+	private void handleOrderDeleted(JsonElement payload, String myId) {
 		String deletedId = payload.getAsJsonObject().get("order_id").getAsString();
 		allOrdersList.removeIf(o -> o.getOrderId().equals(deletedId));
 
@@ -482,13 +479,13 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 			clearActiveTrade("Order was deleted");
 		}
 
-		updateAndRefreshLists(rsn);
+		updateAndRefreshLists(myId);
 		SwingUtilities.invokeLater(() -> panel.setNotifications(notificationList));
 	}
 
 	private void handleIgnoreListState(JsonElement payload) {
 		serverIgnoredList.clear();
-		serverIgnoredList.addAll(gson.fromJson(payload.getAsJsonObject().get("ignored_rsns"), new TypeToken<HashSet<String>>() {}.getType()));
+		serverIgnoredList.addAll(gson.fromJson(payload.getAsJsonObject().get("ignored_ids"), new TypeToken<HashSet<String>>() {}.getType()));
 		SwingUtilities.invokeLater(() -> {
 			if (panel != null) {
 				panel.updateIgnoreList(new ArrayList<>(serverIgnoredList));
@@ -496,11 +493,11 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		});
 	}
 
-	private void updateAndRefreshLists(String rsn) {
+	private void updateAndRefreshLists(String myId) {
 		clientThread.invokeLater(() -> {
 			for (TradeOrder order : allOrdersList) {
 				order.setItem(itemManager.getItemComposition(order.getItemId()));
-				order.setMyOrder(order.getPlayerName().equalsIgnoreCase(rsn));
+				order.setMyOrder(order.getPlayerName().equalsIgnoreCase(myId));
 			}
 			myOrdersList.clear();
 			myOrdersList.addAll(allOrdersList.stream().filter(TradeOrder::isMyOrder).collect(Collectors.toList()));
@@ -523,9 +520,9 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 			return;
 		}
 
-		String selfRsn = client.getLocalPlayer().getName();
-		String targetPlayer = order.getPlayerName();
-		Instant lastNotification = notificationCooldowns.get(targetPlayer);
+		String selfId = identityManager.loadGeneratedUsername();
+		String targetId = order.getPlayerName();
+		Instant lastNotification = notificationCooldowns.get(targetId);
 		if (lastNotification != null && Duration.between(lastNotification, now).getSeconds() < NOTIFICATION_COOLDOWN_SECONDS) {
 			SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(panel, "You must wait before contacting this player again.", "Cooldown Active", JOptionPane.WARNING_MESSAGE));
 			return;
@@ -538,28 +535,24 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		String preposition = myAction.equals("buy") ? "from" : "to";
 		String message = String.format("You requested to %s %s x %s %s %s @ %s ea.",
 				myAction, QuantityFormatter.formatNumber(order.getQuantity()), order.getItemName(),
-				preposition, targetPlayer, order.getPricePerItem());
+				preposition, targetId, order.getPricePerItem());
 
-		Notification sentNotification = new Notification(UUID.randomUUID().toString(), order.getOrderId(), message, selfRsn, targetPlayer, Instant.now(), Notification.NotificationType.SENT, Notification.NotificationStatus.PENDING);
+		Notification sentNotification = new Notification(UUID.randomUUID().toString(), order.getOrderId(), message, selfId, client.getLocalPlayer().getName(), targetId, Instant.now(), Notification.NotificationType.SENT, Notification.NotificationStatus.PENDING);
 		notificationList.add(sentNotification);
 		SwingUtilities.invokeLater(() -> panel.setNotifications(notificationList));
 
 		websocketClient.sendInitiateTrade(order.getOrderId());
-		notificationCooldowns.put(targetPlayer, Instant.now());
-		SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(panel, "A notification has been sent to " + targetPlayer + ".\nOpen the trade window to verify the transaction.", "Notification Sent", JOptionPane.INFORMATION_MESSAGE));
+		notificationCooldowns.put(targetId, Instant.now());
+		SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(panel, "A notification has been sent to " + targetId + ".\nThey must accept before you can trade.", "Notification Sent", JOptionPane.INFORMATION_MESSAGE));
 	}
 
 	public void handleAcceptTrade(Notification notification) {
 		if (notification == null) return;
-		this.activeTrade = notification;
 		this.tradeStatus = TradeStatus.PENDING;
 		this.hasTradeWindowBeenSeen = false;
-		this.otherPlayerRsn = notification.getFromPlayer();
-		notification.setStatus(Notification.NotificationStatus.ACCEPTED);
+		this.otherPlayerRsn = notification.getFromPlayerRsn();
 		log.info("User accepted trade. Setting activeTrade for notification ID: {}", notification.getNotificationId());
 		websocketClient.sendAcceptTrade(notification.getNotificationId());
-		startLocationUpdates();
-		SwingUtilities.invokeLater(() -> panel.setNotifications(notificationList));
 	}
 
 	public void handleCancelAcceptedTrade(Notification notification) {
@@ -600,18 +593,19 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		SwingUtilities.invokeLater(() -> panel.setNotifications(notificationList));
 	}
 
-	public void handleAddToIgnoreList(String rsn) {
-		if (rsn == null || rsn.trim().isEmpty()) return;
-		if (client.getLocalPlayer() != null && rsn.equalsIgnoreCase(client.getLocalPlayer().getName())) {
+	public void handleAddToIgnoreList(String userId) {
+		if (userId == null || userId.trim().isEmpty()) return;
+		String myId = identityManager.loadGeneratedUsername();
+		if (userId.equalsIgnoreCase(myId)) {
 			SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(panel, "You cannot ignore yourself.", "Error", JOptionPane.ERROR_MESSAGE));
 			return;
 		}
-		websocketClient.sendAddToIgnoreList(rsn.trim());
+		websocketClient.sendAddToIgnoreList(userId.trim());
 	}
 
-	public void handleRemoveFromIgnoreList(String rsn) {
-		if (rsn == null || rsn.trim().isEmpty()) return;
-		websocketClient.sendRemoveFromIgnoreList(rsn.trim());
+	public void handleRemoveFromIgnoreList(String userId) {
+		if (userId == null || userId.trim().isEmpty()) return;
+		websocketClient.sendRemoveFromIgnoreList(userId.trim());
 	}
 
 	@Subscribe
@@ -652,9 +646,9 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 
 			ItemContainer container = null;
 			if (groupId == InterfaceID.BANKMAIN) {
-				container = client.getItemContainer(InventoryID.BANK);
+				container = client.getItemContainer(95);
 			} else if (groupId == InterfaceID.INVENTORY) {
-				container = client.getItemContainer(InventoryID.INVENTORY);
+				container = client.getItemContainer(93);
 			}
 
 			if (container == null) {
@@ -725,7 +719,7 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		Map<Integer, Integer> myOffer = getItemsFromWidget(client.getWidget(TRADEMAIN_GROUP_ID, TRADEMAIN_MY_OFFER_LIST_CHILD_ID));
 		Map<Integer, Integer> theirOffer = getItemsFromWidget(client.getWidget(TRADEMAIN_GROUP_ID, TRADEMAIN_THEIR_OFFER_LIST_CHILD_ID));
 
-		boolean amISeller = originalOrder.getPlayerName().equalsIgnoreCase(client.getLocalPlayer().getName());
+		boolean amISeller = originalOrder.getPlayerName().equalsIgnoreCase(identityManager.loadGeneratedUsername());
 		Map<Integer, Integer> sellerItems = amISeller ? myOffer : theirOffer;
 		Map<Integer, Integer> buyerItems = amISeller ? theirOffer : myOffer;
 
@@ -742,13 +736,13 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		int expectedItemId = itemManager.canonicalize(order.getItemId());
 		int expectedQuantity = order.getQuantity();
 		int offeredQuantity = offeredItems.getOrDefault(expectedItemId, 0);
-		return offeredQuantity == expectedQuantity && (offeredItems.size() == 1 || expectedQuantity == 0);
+		return offeredQuantity == expectedQuantity && (offeredItems.size() == 1 || (offeredItems.size() == 2 && offeredItems.containsKey(995)) || expectedQuantity == 0);
 	}
 
 	private boolean verifyPrice(Map<Integer, Integer> offeredItems, TradeOrder order) {
 		long expectedPrice = order.getPrice();
-		long offeredCoins = offeredItems.getOrDefault(ItemID.COINS_995, 0);
-		return offeredCoins == expectedPrice && (offeredItems.size() == 1 || expectedPrice == 0);
+		long offeredCoins = offeredItems.getOrDefault(995, 0);
+		return offeredCoins == expectedPrice && (offeredItems.size() == 1 || (offeredItems.size() > 1 && offeredItems.containsKey(995)) || expectedPrice == 0);
 	}
 
 	public void clearActiveTrade(String reason) {
@@ -787,8 +781,6 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		worldMapPoint.setJumpOnClick(true);
 		worldMapPointManager.add(worldMapPoint);
 	}
-
-
 
 	private BufferedImage getMapPointImage() {
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/panel_icon.png");
@@ -911,9 +903,9 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 	private long getPlayerItemCount(int itemId) {
 		if (client.getGameState() != GameState.LOGGED_IN) return 0;
 		long count = 0;
-		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+		ItemContainer inventory = client.getItemContainer(93);
 		if (inventory != null) count += inventory.count(itemId);
-		ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+		ItemContainer bank = client.getItemContainer(95);
 		if (bank != null) count += bank.count(itemId);
 		return count;
 	}
@@ -922,8 +914,8 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 		clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.BROADCAST, "", message, null));
 	}
 
-	public boolean isPlayerOnline(String rsn) {
-		return onlineUsers.contains(rsn.toLowerCase());
+	public boolean isPlayerOnline(String userId) {
+		return onlineUsers.contains(userId);
 	}
 
 	public Instant getTradeButtonCooldownEnd(String orderId) {

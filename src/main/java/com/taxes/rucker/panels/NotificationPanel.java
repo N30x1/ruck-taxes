@@ -20,6 +20,7 @@ import net.runelite.client.ui.ColorScheme;
 public class NotificationPanel extends JPanel {
     private final Notification notification;
     private final RucktaxesPlugin plugin;
+    private JLabel nameLabel;
 
     public NotificationPanel(Notification notification, RucktaxesPlugin plugin) {
         this.notification = notification;
@@ -34,14 +35,34 @@ public class NotificationPanel extends JPanel {
         add(createSouthPanel(), BorderLayout.SOUTH);
     }
 
+    public String getNotificationId() {
+        return notification.getNotificationId();
+    }
+
+    public void updatePlayerName(String realName) {
+        if (nameLabel != null) {
+            nameLabel.setText(realName);
+            nameLabel.setToolTipText("Original ID: " + getOtherPlayerId());
+        }
+    }
+
+    private String getOtherPlayerId() {
+        return notification.getType() == NotificationType.SENT
+                ? notification.getToPlayerId()
+                : notification.getFromPlayerId();
+    }
+
+    private String getOtherPlayerInitialName() {
+        return notification.getType() == NotificationType.SENT
+                ? notification.getToPlayerId()
+                : notification.getFromPlayerRsn();
+    }
+
     private JPanel createTopPanel() {
         JPanel topLine = new JPanel(new BorderLayout());
         topLine.setBackground(null);
 
-        String otherPlayer = notification.getType() == NotificationType.SENT
-                ? notification.getToPlayer()
-                : notification.getFromPlayer();
-        JLabel nameLabel = new JLabel(otherPlayer);
+        nameLabel = new JLabel(getOtherPlayerInitialName());
         nameLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 
         JLabel timeLabel = new JLabel(formatTimeAgo(notification.getTimestamp()));
@@ -88,7 +109,7 @@ public class NotificationPanel extends JPanel {
 
         if (notification.getType() == NotificationType.RECEIVED && notification.getStatus() == NotificationStatus.PENDING) {
             buttonPanel.add(createButton("Accept", plugin::handleAcceptTrade));
-            buttonPanel.add(createButton("Ignore", n -> plugin.handleAddToIgnoreList(n.getFromPlayer())));
+            buttonPanel.add(createButton("Ignore", n -> plugin.handleAddToIgnoreList(n.getFromPlayerId())));
         } else if (notification.getStatus() == NotificationStatus.ACCEPTED) {
             buttonPanel.add(createButton("Cancel", plugin::handleCancelAcceptedTrade));
             JButton forceButton = createButton("Force", plugin::handleForceCompleteTrade);

@@ -12,11 +12,10 @@ import net.runelite.api.ItemComposition;
 public class TradeOrder {
     public enum OrderType { BUY, SELL }
 
-    // FIX: Changed annotation from "order_id" to "id" to match the backend schema.
     @SerializedName("id")
     private String orderId;
 
-    @SerializedName("owner_rsn")
+    @SerializedName("owner_id")
     private String playerName;
 
     @SerializedName("order_type")

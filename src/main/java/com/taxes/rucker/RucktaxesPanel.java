@@ -241,11 +241,12 @@ public class RucktaxesPanel extends PluginPanel {
 
         JPanel ignoreControls = new JPanel(new BorderLayout(5, 0));
         ignoreControls.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        JTextField rsnInputField = new JTextField();
+        JTextField idInputField = new JTextField();
+        idInputField.setToolTipText("Enter the anonymous ID of the user to ignore");
         JButton addButton = new JButton("Add");
-        rsnInputField.addActionListener(e -> addIgnoredPlayer(rsnInputField));
-        addButton.addActionListener(e -> addIgnoredPlayer(rsnInputField));
-        ignoreControls.add(rsnInputField, BorderLayout.CENTER);
+        idInputField.addActionListener(e -> addIgnoredPlayer(idInputField));
+        addButton.addActionListener(e -> addIgnoredPlayer(idInputField));
+        ignoreControls.add(idInputField, BorderLayout.CENTER);
         ignoreControls.add(addButton, BorderLayout.EAST);
 
         ignoreListPanel.add(ignoreControls, BorderLayout.NORTH);
@@ -256,11 +257,11 @@ public class RucktaxesPanel extends PluginPanel {
         return ignoreListPanel;
     }
 
-    private void addIgnoredPlayer(JTextField rsnInputField) {
-        String rsn = rsnInputField.getText();
-        if (rsn != null && !rsn.trim().isEmpty()) {
-            plugin.handleAddToIgnoreList(rsn.trim());
-            rsnInputField.setText("");
+    private void addIgnoredPlayer(JTextField idInputField) {
+        String id = idInputField.getText();
+        if (id != null && !id.trim().isEmpty()) {
+            plugin.handleAddToIgnoreList(id.trim());
+            idInputField.setText("");
         }
     }
 
@@ -379,26 +380,38 @@ public class RucktaxesPanel extends PluginPanel {
         updateListPanel(notificationsContainer, panels, "No Notifications", "No notifications match the current filter.");
     }
 
-    public void updateIgnoreList(List<String> ignoredRsns) {
-        List<String> sortedRsns = new ArrayList<>(ignoredRsns);
-        sortedRsns.sort(String.CASE_INSENSITIVE_ORDER);
+    public void updateNotificationPlayerName(String notificationId, String realName) {
+        for (Component comp : notificationsContainer.getComponents()) {
+            if (comp instanceof NotificationPanel) {
+                NotificationPanel panel = (NotificationPanel) comp;
+                if (panel.getNotificationId().equals(notificationId)) {
+                    panel.updatePlayerName(realName);
+                    break;
+                }
+            }
+        }
+    }
 
-        List<Component> panels = sortedRsns.stream()
+    public void updateIgnoreList(List<String> ignoredIds) {
+        List<String> sortedIds = new ArrayList<>(ignoredIds);
+        sortedIds.sort(String.CASE_INSENSITIVE_ORDER);
+
+        List<Component> panels = sortedIds.stream()
                 .map(this::createIgnoreListEntry)
                 .collect(Collectors.toList());
         updateListPanel(ignoreListContainer, panels, "Ignore List is Empty", "You are not currently ignoring any players.");
     }
 
-    private JPanel createIgnoreListEntry(String rsn) {
+    private JPanel createIgnoreListEntry(String id) {
         JPanel entryPanel = new JPanel(new BorderLayout());
         entryPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
         entryPanel.setBorder(new EmptyBorder(2, 5, 2, 5));
 
-        JLabel nameLabel = new JLabel(rsn);
+        JLabel nameLabel = new JLabel(id);
         nameLabel.setForeground(Color.WHITE);
 
         JButton removeButton = new JButton("Remove");
-        removeButton.addActionListener(e -> plugin.handleRemoveFromIgnoreList(rsn));
+        removeButton.addActionListener(e -> plugin.handleRemoveFromIgnoreList(id));
 
         entryPanel.add(nameLabel, BorderLayout.CENTER);
         entryPanel.add(removeButton, BorderLayout.EAST);
