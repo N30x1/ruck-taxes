@@ -216,6 +216,13 @@ public class RucktaxesPanel extends PluginPanel {
         sentNotifsRadio.addActionListener(e -> setNotifications(plugin.getNotifications()));
         receivedNotifsRadio.addActionListener(e -> setNotifications(plugin.getNotifications()));
 
+        JButton clearButton = getClearButton();
+        notificationControls.add(Box.createRigidArea(new Dimension(10, 0)));
+        notificationControls.add(clearButton);
+        return notificationControls;
+    }
+
+    private JButton getClearButton() {
         JButton clearButton = new JButton("Clear");
         clearButton.addActionListener(e -> {
             int result = JOptionPane.showConfirmDialog(this, "Are you sure you want to clear these notifications?", "Confirm Clear", JOptionPane.YES_NO_OPTION);
@@ -229,9 +236,7 @@ public class RucktaxesPanel extends PluginPanel {
                 plugin.handleClearNotifications(typeToClear);
             }
         });
-        notificationControls.add(Box.createRigidArea(new Dimension(10, 0)));
-        notificationControls.add(clearButton);
-        return notificationControls;
+        return clearButton;
     }
 
     private JPanel createIgnoreListTab() {
