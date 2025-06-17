@@ -244,6 +244,17 @@ public class RucktaxesPanel extends PluginPanel {
         ignoreListPanel.setBorder(new EmptyBorder(5, 5, 5, 5));
         ignoreListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 
+        JPanel ignoreControls = getIgnorePanel();
+
+        ignoreListPanel.add(ignoreControls, BorderLayout.NORTH);
+        ignoreListContainer.setBorder(new EmptyBorder(8, 0, 0, 0));
+        ignoreListContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
+        ignoreListPanel.add(createScrollPane(ignoreListContainer), BorderLayout.CENTER);
+
+        return ignoreListPanel;
+    }
+
+    private JPanel getIgnorePanel() {
         JPanel ignoreControls = new JPanel(new BorderLayout(5, 0));
         ignoreControls.setBackground(ColorScheme.DARK_GRAY_COLOR);
         JTextField idInputField = new JTextField();
@@ -253,13 +264,7 @@ public class RucktaxesPanel extends PluginPanel {
         addButton.addActionListener(e -> addIgnoredPlayer(idInputField));
         ignoreControls.add(idInputField, BorderLayout.CENTER);
         ignoreControls.add(addButton, BorderLayout.EAST);
-
-        ignoreListPanel.add(ignoreControls, BorderLayout.NORTH);
-        ignoreListContainer.setBorder(new EmptyBorder(8, 0, 0, 0));
-        ignoreListContainer.setBackground(ColorScheme.DARK_GRAY_COLOR);
-        ignoreListPanel.add(createScrollPane(ignoreListContainer), BorderLayout.CENTER);
-
-        return ignoreListPanel;
+        return ignoreControls;
     }
 
     private void addIgnoredPlayer(JTextField idInputField) {
