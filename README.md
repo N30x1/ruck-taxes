@@ -34,6 +34,12 @@ Complete the trade in the trade window with validation.
 
 ![Finalize Trade](https://cdn.discordapp.com/attachments/713075501471760528/1384324459972001905/2025-06-17_02-05-24.png?ex=6852041e&is=6850b29e&hm=a3a1f6e3b094675dc02fc2d9eb30ab3101af4458518eec0b1f1ef1d522876368&)
 
+
+### 7. Ignore lists
+There is also ignore management.
+
+![Ignore Management](https://media.discordapp.net/attachments/713075501471760528/1384323810253340754/2025-06-17_02-08-20.png?ex=68520383&is=6850b203&hm=a6aceb54604e5984f519458c26b4ba394bc779561fdfb7575e06779b8c198520)
+
 ## Additional Notes
 - **Completed Orders**: Once a trade is finalized, the order is removed from listings and active orders.
 - Ensure you verify all trade details before completing to avoid errors.
