@@ -40,4 +40,5 @@ Complete the trade in the trade window with validation.
 
 ## ToDo's
 - Add easy support for price input (1m, 1.1b etc.)
-- Show other player's world when the trades have been accepted by both parties.
+- Show other player's world when the trades have been accepted by both parties
+- Ability to create orders swapping items instead of gold like: 5 lobsters for 1 shark ea
