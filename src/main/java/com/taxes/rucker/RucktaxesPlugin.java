@@ -128,7 +128,6 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 	private boolean hasTradeWindowBeenSeen = false;
 	private boolean connectionAttemptedThisSession = false;
 
-	// NEW: Add an instance of IdentityManager to the plugin
 	private IdentityManager identityManager;
 
 	@Provides
@@ -158,7 +157,6 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 
 	@Override
 	protected void startUp() {
-		// NEW: Initialize the IdentityManager
 		this.identityManager = new IdentityManager();
 
 		panel = new RucktaxesPanel(this, itemManager);
