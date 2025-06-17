@@ -89,18 +89,6 @@ public class RucktaxesWebsocketClient extends WebSocketListener {
 
         if (this.privateKey == null || this.generatedUsername == null || this.generatedUsername.isEmpty()) {
             log.info("No existing identity found. Starting registration process.");
-            int result = JOptionPane.showConfirmDialog(
-                    null,
-                    "This plugin will communicate with a 3rd party server, which may use your IP address. Do you wish to proceed?",
-                    "3rd Party Communication Warning",
-                    JOptionPane.YES_NO_OPTION,
-                    JOptionPane.WARNING_MESSAGE
-            );
-
-            if (result != JOptionPane.YES_OPTION) {
-                log.info("User declined 3rd party communication. Plugin startup aborted.");
-                return;
-            }
             registerNewClient();
         } else {
             log.info("Existing identity found for generated username: {}. Starting challenge-response.", generatedUsername);
