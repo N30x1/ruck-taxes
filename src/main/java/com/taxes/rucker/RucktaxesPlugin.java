@@ -158,7 +158,6 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 	@Override
 	protected void startUp() {
 		this.identityManager = new IdentityManager();
-
 		panel = new RucktaxesPanel(this, itemManager);
 		final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "/panel_icon.png");
 		navButton = NavigationButton.builder().tooltip("Rucktaxes Trades").icon(icon).priority(6).panel(panel).build();
