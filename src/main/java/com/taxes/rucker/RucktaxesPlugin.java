@@ -908,7 +908,7 @@ public class RucktaxesPlugin extends Plugin implements KeyListener {
 	}
 
 	private void sendGameMessage(String message) {
-		clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.BROADCAST, "", message, null));
+		clientThread.invokeLater(() -> client.addChatMessage(ChatMessageType.BROADCAST, "Offer", message, null));
 	}
 
 	public boolean isPlayerOnline(String userId) {
