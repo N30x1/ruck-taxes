@@ -7,7 +7,7 @@ A Runelite plugin that enhances OSRS trading capabilities with:
 
 - **Enhanced Privacy**
     - No username storage on servers
-    - Secure PGP key generation for runelite instance
+    - Secure PGP key generation for each runelite instance
     - Anonymous listing creation with randomized identifiers
 
 - **Server Security**
